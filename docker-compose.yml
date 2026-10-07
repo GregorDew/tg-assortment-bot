@@ -1,0 +1,10 @@
+services:
+  telegram-bot:
+    build: .
+    container_name: tg_assortment_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./bot.db:/app/bot.db
+      - ./bot.log:/app/bot.log

@@ -1,0 +1,87 @@
+import html
+import logging
+from typing import Optional, Union
+from aiogram import Bot
+from aiogram.types import Message
+from app.database.models import Product
+
+logger = logging.getLogger(__name__)
+
+
+class PublisherService:
+    @staticmethod
+    def format_product_post(product: Product, is_preview: bool = False) -> str:
+        """
+        Форматує текст повідомлення про оновлення асортименту у форматі HTML.
+        """
+        escaped_title = html.escape(product.title)
+        lines = []
+
+        if is_preview:
+            lines.append("👁 <b>[ПОПЕРЕДНІЙ ПЕРЕГЛЯД ПОСТУ]</b>")
+            lines.append("───────────────────────")
+        else:
+            lines.append("🔥 <b>ОНОВЛЕННЯ АСОРТИМЕНТУ!</b>")
+            lines.append("───────────────────────")
+
+        lines.append(f"📦 <b>{escaped_title}</b>\n")
+
+        if product.description:
+            escaped_desc = html.escape(product.description)
+            lines.append(f"📝 <b>Опис:</b>\n{escaped_desc}\n")
+
+        if product.price:
+            escaped_price = html.escape(product.price)
+            lines.append(f"💰 <b>Ціна:</b> {escaped_price}")
+
+        lines.append("\n🛒 <i>Для замовлення звертайтесь до адміністратора!</i>")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    async def send_product_post(
+        bot: Bot,
+        chat_id: Union[int, str],
+        product: Product,
+        is_preview: bool = False,
+        reply_markup=None
+    ) -> Optional[Message]:
+        """
+        Публікує пост про товар у зазначений чат (канал/групу або адміну для прев'ю).
+        Підтримує відправку фото (file_id або URL) або просто тексту, якщо фото відсутнє.
+        """
+        caption = PublisherService.format_product_post(product, is_preview=is_preview)
+
+        try:
+            # 1. Якщо є Telegram file_id
+            if product.photo_file_id:
+                return await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=product.photo_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+
+            # 2. Якщо є зовнішнє посилання на фото (URL)
+            elif product.photo_url:
+                return await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=product.photo_url,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+
+            # 3. Якщо фото немає - відправляємо як текстове повідомлення
+            else:
+                return await bot.send_message(
+                    chat_id=chat_id,
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup
+                )
+
+        except Exception as e:
+            logger.error(f"Помилка при надсиланні посту товару #{product.id} в чат {chat_id}: {e}")
+            raise e
