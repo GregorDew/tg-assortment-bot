@@ -94,7 +94,7 @@ async def check_and_process_db_updates(bot: Bot) -> None:
                                 chat_id=admin_id,
                                 product=product,
                                 is_preview=True,
-                                reply_markup=get_preview_moderation_kb(product.id)
+                                reply_markup=get_preview_moderation_kb(product.id, settings.MANAGER_USERNAME)
                             )
                         except Exception as adm_err:
                             logger.warning(f"Не вдалося надіслати прев'ю адміну {admin_id}: {adm_err}")

@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     TARGET_CHAT_ID: Union[int, str] = "-100123456789"
     DATABASE_URL: str = "sqlite+aiosqlite:///bot.db"
     DB_CHECK_INTERVAL_SECONDS: int = 60
+    MANAGER_USERNAME: str = ""
+
+    @field_validator("MANAGER_USERNAME", mode="before")
+    @classmethod
+    def clean_manager_username(cls, v: Union[str, None]) -> str:
+        if isinstance(v, str):
+            return v.strip().lstrip("@")
+        return ""
 
     @field_validator("ADMIN_IDS", mode="before")
     @classmethod

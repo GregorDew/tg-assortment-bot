@@ -9,6 +9,7 @@ from app.keyboards.admin_kb import (
     get_preview_moderation_kb,
     get_admin_main_kb
 )
+from app.config import settings
 from app.database.database import async_session_maker
 from app.services.product_service import ProductService
 from app.services.settings_service import SettingsService
@@ -157,5 +158,5 @@ async def finish_post_creation(message: Message, state: FSMContext, price: str |
         chat_id=message.chat.id,
         product=product,
         is_preview=True,
-        reply_markup=get_preview_moderation_kb(product.id)
+        reply_markup=get_preview_moderation_kb(product.id, settings.MANAGER_USERNAME)
     )

@@ -50,6 +50,11 @@ class PublisherService:
         Публікує пост про товар у зазначений чат (канал/групу або адміну для прев'ю).
         Підтримує відправку фото (file_id або URL) або просто тексту, якщо фото відсутнє.
         """
+        if not is_preview and reply_markup is None:
+            from app.config import settings
+            from app.keyboards.admin_kb import get_channel_post_kb
+            reply_markup = get_channel_post_kb(settings.MANAGER_USERNAME)
+
         caption = PublisherService.format_product_post(product, is_preview=is_preview)
 
         try:

@@ -1,3 +1,4 @@
-from app.states.manual_post import ManualPostFSM
+from app.states.manual_post import ManualPostFSM, EditProductFSM
 
-__all__ = ["ManualPostFSM"]
+__all__ = ["ManualPostFSM", "EditProductFSM"]
+

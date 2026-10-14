@@ -79,3 +79,36 @@ class ProductService:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    @staticmethod
+    async def update_product_fields(
+        session: AsyncSession,
+        product_id: int,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        price: Optional[str] = None,
+        photo_file_id: Optional[str] = None,
+        clear_photo: bool = False
+    ) -> Optional[Product]:
+        """Оновлює окремі поля товару під час редагування адміном."""
+        product = await ProductService.get_product_by_id(session, product_id)
+        if not product:
+            return None
+
+        if title is not None:
+            product.title = title
+        if description is not None:
+            product.description = description
+        if price is not None:
+            product.price = price
+        if clear_photo:
+            product.photo_file_id = None
+            product.photo_url = None
+        elif photo_file_id is not None:
+            product.photo_file_id = photo_file_id
+            product.photo_url = None
+
+        await session.commit()
+        await session.refresh(product)
+        return product
+
