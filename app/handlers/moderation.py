@@ -27,14 +27,72 @@ router.message.filter(IsAdminFilter())
 async def process_publish_decision(callback: CallbackQuery, state: FSMContext):
     """Обробка підтвердження публікації посту в цільову групу/канал."""
     await state.clear()
-    product_id = int(callback.data.split(":")[2])
+    item_id = int(callback.data.split(":")[2])
     admin_name = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {callback.from_user.id}"
 
-    async with async_session_maker() as session:
-        product = await ProductService.get_product_by_id(session, product_id)
+    from app.database.models import PendingPublicationModel, PublishRuleModel
+    from app.core.connectors.base import PreparedPost
+    from app.core.rules.engine import dispatch_to_channels
+    import json
+    from datetime import datetime
 
+    async with async_session_maker() as session:
+        # 1. Перевіряємо, чи це універсальна публікація з правил (PendingPublicationModel)
+        res_pending = await session.execute(
+            select(PendingPublicationModel).where(PendingPublicationModel.id == item_id)
+        )
+        pending = res_pending.scalar_one_or_none()
+
+        if pending:
+            if pending.status in ("published", "rejected"):
+                status_text = "опубліковано" if pending.status == "published" else "відхилено"
+                await callback.answer(f"⚠️ Цей запис уже {status_text} ({pending.moderated_by or 'іншим адміном'})!", show_alert=True)
+                return
+
+            rule_res = await session.execute(select(PublishRuleModel).where(PublishRuleModel.id == pending.rule_id))
+            rule = rule_res.scalar_one_or_none()
+            channel_ids = json.loads(rule.channel_ids_json) if rule and rule.channel_ids_json else []
+
+            prep_data = json.loads(pending.prepared_data_json)
+            post = PreparedPost(
+                title=prep_data.get("title"),
+                body=prep_data.get("body", ""),
+                photo_url=prep_data.get("photo_url"),
+                manager_button_url=prep_data.get("manager_button_url")
+            )
+
+            await dispatch_to_channels(
+                session=session,
+                bot=callback.bot,
+                channel_ids=channel_ids,
+                post=post,
+                rule_id=pending.rule_id,
+                source_id=pending.source_id,
+                record_id=pending.record_id,
+                event_type=pending.event_type
+            )
+
+            pending.status = "published"
+            pending.moderated_by = admin_name
+            pending.moderated_at = datetime.utcnow()
+            await session.commit()
+
+            await callback.answer("✅ Успішно опубліковано у всі канали правила!", show_alert=True)
+            status_suffix = f"\n\n━━━━━━━━━━━━━━━━━━━━\n✅ <b>ОПУБЛІКОВАНО В КАНАЛИ ПРАВИЛА</b>\n👤 Адмін: {html.escape(admin_name)}"
+            new_caption = (callback.message.caption or callback.message.text or "") + status_suffix
+            try:
+                if callback.message.photo:
+                    await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+                else:
+                    await callback.message.edit_text(text=new_caption, reply_markup=None, parse_mode="HTML")
+            except Exception:
+                pass
+            return
+
+        # 2. Наявний товар (Product)
+        product = await ProductService.get_product_by_id(session, item_id)
         if not product:
-            await callback.answer("⚠️ Товар не знайдено в базі даних!", show_alert=True)
+            await callback.answer("⚠️ Запис не знайдено в базі даних!", show_alert=True)
             return
 
         # Захист від повторної обробки різними адмінами
@@ -61,30 +119,21 @@ async def process_publish_decision(callback: CallbackQuery, state: FSMContext):
         # Оновлення статусу в базі даних
         await ProductService.update_product_status(
             session=session,
-            product_id=product_id,
+            product_id=item_id,
             status="published",
             moderated_by=admin_name
         )
 
     await callback.answer("✅ Пост успішно опубліковано в групу!", show_alert=True)
 
-    # Оновлення повідомлення попереднього перегляду у чаті адміна
     status_suffix = f"\n\n━━━━━━━━━━━━━━━━━━━━\n✅ <b>ОПУБЛІКОВАНО В ГРУПУ</b>\n👤 Адміністратор: {html.escape(admin_name)}"
     new_caption = (callback.message.caption or callback.message.text or "") + status_suffix
 
     try:
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
         else:
-            await callback.message.edit_text(
-                text=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text(text=new_caption, reply_markup=None, parse_mode="HTML")
     except Exception:
         pass
 
@@ -97,29 +146,55 @@ async def process_publish_decision(callback: CallbackQuery, state: FSMContext):
 async def process_reject_decision(callback: CallbackQuery, state: FSMContext):
     """Обробка відхилення публікації посту."""
     await state.clear()
-    product_id = int(callback.data.split(":")[2])
+    item_id = int(callback.data.split(":")[2])
     admin_name = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {callback.from_user.id}"
 
-    async with async_session_maker() as session:
-        product = await ProductService.get_product_by_id(session, product_id)
+    from app.database.models import PendingPublicationModel
+    from datetime import datetime
 
-        if not product:
-            await callback.answer("⚠️ Товар не знайдено в базі даних!", show_alert=True)
+    async with async_session_maker() as session:
+        # Перевірка PendingPublicationModel
+        res_pending = await session.execute(
+            select(PendingPublicationModel).where(PendingPublicationModel.id == item_id)
+        )
+        pending = res_pending.scalar_one_or_none()
+        if pending:
+            if pending.status in ("published", "rejected"):
+                status_text = "опубліковано" if pending.status == "published" else "відхилено"
+                await callback.answer(f"⚠️ Цей запис уже {status_text} ({pending.moderated_by or 'невідомо'})!", show_alert=True)
+                return
+
+            pending.status = "rejected"
+            pending.moderated_by = admin_name
+            pending.moderated_at = datetime.utcnow()
+            await session.commit()
+            await callback.answer("❌ Публікацію відхилено.", show_alert=True)
+
+            status_suffix = f"\n\n━━━━━━━━━━━━━━━━━━━━\n❌ <b>ВІДХИЛЕНО</b>\n👤 Адміністратор: {html.escape(admin_name)}"
+            new_caption = (callback.message.caption or callback.message.text or "") + status_suffix
+            try:
+                if callback.message.photo:
+                    await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
+                else:
+                    await callback.message.edit_text(text=new_caption, reply_markup=None, parse_mode="HTML")
+            except Exception:
+                pass
             return
 
-        # Захист від повторної обробки
+        # Наявний товар (Product)
+        product = await ProductService.get_product_by_id(session, item_id)
+        if not product:
+            await callback.answer("⚠️ Запис не знайдено!", show_alert=True)
+            return
+
         if product.status in ("published", "rejected"):
             status_text = "опубліковано" if product.status == "published" else "відхилено"
-            await callback.answer(
-                f"⚠️ Цей пост уже був {status_text} адміністратором ({product.moderated_by or 'невідомо'})!",
-                show_alert=True
-            )
+            await callback.answer(f"⚠️ Цей пост уже був {status_text} ({product.moderated_by or 'невідомо'})!", show_alert=True)
             return
 
-        # Оновлення статусу на 'rejected'
         await ProductService.update_product_status(
             session=session,
-            product_id=product_id,
+            product_id=item_id,
             status="rejected",
             moderated_by=admin_name
         )
@@ -131,17 +206,9 @@ async def process_reject_decision(callback: CallbackQuery, state: FSMContext):
 
     try:
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
         else:
-            await callback.message.edit_text(
-                text=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text(text=new_caption, reply_markup=None, parse_mode="HTML")
     except Exception:
         pass
 
@@ -153,21 +220,29 @@ async def process_reject_decision(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("mod:edit:"))
 async def open_edit_menu(callback: CallbackQuery):
     """Відкриває меню вибору поля для редагування."""
-    product_id = int(callback.data.split(":")[2])
+    item_id = int(callback.data.split(":")[2])
 
+    from app.database.models import PendingPublicationModel
     async with async_session_maker() as session:
-        product = await ProductService.get_product_by_id(session, product_id)
-        if not product:
-            await callback.answer("⚠️ Товар не знайдено!", show_alert=True)
-            return
-        if product.status in ("published", "rejected"):
+        res_pending = await session.execute(
+            select(PendingPublicationModel).where(PendingPublicationModel.id == item_id)
+        )
+        pending = res_pending.scalar_one_or_none()
+        if pending and pending.status in ("published", "rejected"):
             await callback.answer("⚠️ Цей пост уже опубліковано або відхилено!", show_alert=True)
             return
 
+        if not pending:
+            product = await ProductService.get_product_by_id(session, item_id)
+            if not product:
+                await callback.answer("⚠️ Запис не знайдено!", show_alert=True)
+                return
+            if product.status in ("published", "rejected"):
+                await callback.answer("⚠️ Цей пост уже опубліковано або відхилено!", show_alert=True)
+                return
+
     try:
-        await callback.message.edit_reply_markup(
-            reply_markup=get_edit_menu_kb(product_id)
-        )
+        await callback.message.edit_reply_markup(reply_markup=get_edit_menu_kb(item_id))
     except Exception:
         pass
     await callback.answer("✏️ Оберіть поле для редагування")

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///bot.db"
     DB_CHECK_INTERVAL_SECONDS: int = 60
     MANAGER_USERNAME: str = ""
+    ENCRYPTION_KEY: str = ""
 
     @field_validator("MANAGER_USERNAME", mode="before")
     @classmethod

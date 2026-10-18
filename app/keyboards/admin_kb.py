@@ -2,36 +2,43 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def get_admin_main_kb(auto_post_enabled: bool) -> InlineKeyboardMarkup:
-    """Головна інлайн-клавіатура панелі адміністратора."""
+    """Головна інлайн-клавіатура панелі адміністратора (усі 6 розділів системи)."""
     status_icon = "🟢 УВІМКНЕНО" if auto_post_enabled else "🔴 ВИМКНЕНО"
 
     keyboard = [
         [
-            InlineKeyboardButton(
-                text="📝 Створити пост вручну",
-                callback_data="admin:create_post"
-            )
+            InlineKeyboardButton(text="🗄 Джерела даних", callback_data="menu:sources"),
+            InlineKeyboardButton(text="📢 Канали публікації", callback_data="menu:channels")
         ],
         [
-            InlineKeyboardButton(
-                text=f"🔄 Автопост: {status_icon}",
-                callback_data="admin:toggle_autopost"
-            )
+            InlineKeyboardButton(text="🔄 Правила та маршрути", callback_data="menu:rules"),
+            InlineKeyboardButton(text="📝 Шаблони", callback_data="menu:templates")
         ],
         [
-            InlineKeyboardButton(
-                text="➕ Додати тестовий товар у БД",
-                callback_data="admin:add_test_product"
-            )
+            InlineKeyboardButton(text="📦 Погодження", callback_data="menu:moderation"),
+            InlineKeyboardButton(text="📊 Журнал і помилки", callback_data="menu:logs")
         ],
         [
-            InlineKeyboardButton(
-                text="📋 Останні оновлення (БД)",
-                callback_data="admin:list_products"
-            )
+            InlineKeyboardButton(text="📝 Створити пост вручну", callback_data="admin:create_post")
+        ],
+        [
+            InlineKeyboardButton(text=f"🔄 Автопост: {status_icon}", callback_data="admin:toggle_autopost")
+        ],
+        [
+            InlineKeyboardButton(text="➕ Додати тестовий товар у БД", callback_data="admin:add_test_product")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_back_to_main_kb() -> InlineKeyboardMarkup:
+    """Кнопка повернення до головного меню."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 До головного меню", callback_data="menu:main")]
+        ]
+    )
+
 
 
 def get_channel_post_kb(manager_username: str | None = None) -> InlineKeyboardMarkup | None:

@@ -18,7 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config import settings
 from app.database import init_db
 from app.handlers import main_router
-from app.schedulers import check_and_process_db_updates
+from app.schedulers import check_and_process_db_updates, check_and_execute_publish_rules
 
 # Налаштування логування
 logging.basicConfig(
@@ -67,9 +67,15 @@ async def main():
         seconds=settings.DB_CHECK_INTERVAL_SECONDS,
         args=[bot]
     )
+    scheduler.add_job(
+        check_and_execute_publish_rules,
+        trigger="interval",
+        seconds=15,
+        args=[bot]
+    )
     scheduler.start()
     logger.info(
-        f"Фоновий моніторинг БД запущено з інтервалом {settings.DB_CHECK_INTERVAL_SECONDS} сек."
+        f"Фоновий моніторинг БД запущено ({settings.DB_CHECK_INTERVAL_SECONDS}с) та універсальних правил (15с)."
     )
 
     try:

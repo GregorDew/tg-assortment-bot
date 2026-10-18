@@ -110,3 +110,66 @@ async def callback_list_products(callback: CallbackQuery):
         reply_markup=get_admin_main_kb(auto_post_status),
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data == "menu:main")
+async def callback_back_to_main(callback: CallbackQuery):
+    """Повернення до головного меню з будь-якого розділу."""
+    async with async_session_maker() as session:
+        auto_post_status = await SettingsService.get_auto_post_status(session)
+
+    text = (
+        "👋 <b>Головна панель керування системою</b>\n\n"
+        "Оберіть потрібний розділ для керування:"
+    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_admin_main_kb(auto_post_status),
+            parse_mode="HTML"
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=get_admin_main_kb(auto_post_status),
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:moderation")
+async def callback_moderation_queue(callback: CallbackQuery):
+    """Розділ черги погодження публікацій."""
+    from app.database.models import PendingPublicationModel, Product
+    async with async_session_maker() as session:
+        # 1. Нові записи з правил
+        res_pending = await session.execute(
+            select(PendingPublicationModel).where(PendingPublicationModel.status == "pending")
+        )
+        pendings = list(res_pending.scalars().all())
+
+        # 2. Наявні товари
+        res_prod = await session.execute(
+            select(Product).where(Product.status.in_(("pending", "waiting_approval")))
+        )
+        prods = list(res_prod.scalars().all())
+
+    total_waiting = len(pendings) + len(prods)
+    if total_waiting == 0:
+        text = "📦 <b>Черга погодження</b>\n\n✅ Усі публікації розглянуто. Немає записів, які очікують підтвердження."
+        from app.keyboards.admin_kb import get_back_to_main_kb
+        await callback.message.edit_text(text, reply_markup=get_back_to_main_kb(), parse_mode="HTML")
+        await callback.answer()
+        return
+
+    text = (
+        f"📦 <b>Черга погодження ({total_waiting} очікують):</b>\n\n"
+        f"• Нових надходжень із зовнішніх джерел: <b>{len(pendings)}</b>\n"
+        f"• Товарів на модерації: <b>{len(prods)}</b>\n\n"
+        "Усі картки для погодження надіслані вам у приватні повідомлення з кнопками "
+        "«✅ Опублікувати», «❌ Відхилити» та «✏️ Редагувати»."
+    )
+    from app.keyboards.admin_kb import get_back_to_main_kb
+    await callback.message.edit_text(text, reply_markup=get_back_to_main_kb(), parse_mode="HTML")
+    await callback.answer()
+
