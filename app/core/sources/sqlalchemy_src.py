@@ -8,10 +8,32 @@ class GenericSQLDataSource(BaseDataSource):
     """Адаптер для будь-яких SQL баз даних через SQLAlchemy (SQLite, PostgreSQL, тощо)."""
 
     def __init__(self, config: Dict[str, Any]):
-        self.url = config.get("url", "")
-        self.engine = create_async_engine(self.url, echo=False)
+        raw_url = (
+            config.get("url")
+            or config.get("database")
+            or config.get("connection_string")
+            or config.get("db_path")
+            or config.get("path")
+            or ""
+        )
+        url = str(raw_url).strip()
+
+        # Автоматично доповнюємо або виправляємо префікси драйверів
+        if url and not ("://" in url):
+            url = f"sqlite+aiosqlite:///{url}"
+        elif url.startswith("sqlite:///"):
+            url = url.replace("sqlite:///", "sqlite+aiosqlite:///")
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://")
+        elif url.startswith("mysql://"):
+            url = url.replace("mysql://", "mysql+aiomysql://")
+
+        self.url = url
+        self.engine = create_async_engine(self.url, echo=False) if self.url else None
 
     async def test_connection(self) -> Tuple[bool, str]:
+        if not self.engine:
+            return False, "Не вказано коректний URL або шлях до бази даних."
         try:
             async with self.engine.connect() as conn:
                 await conn.execute(text("SELECT 1;"))
@@ -20,6 +42,8 @@ class GenericSQLDataSource(BaseDataSource):
             return False, f"Помилка підключення: {e}"
 
     async def get_tables_and_views(self) -> List[str]:
+        if not self.engine:
+            return []
         async with self.engine.connect() as conn:
             def _inspect(sync_conn):
                 inspector = inspect(sync_conn)
@@ -29,6 +53,8 @@ class GenericSQLDataSource(BaseDataSource):
             return await conn.run_sync(_inspect)
 
     async def get_table_schema(self, table_name: str) -> List[str]:
+        if not self.engine:
+            return []
         async with self.engine.connect() as conn:
             def _inspect_cols(sync_conn):
                 inspector = inspect(sync_conn)
@@ -46,7 +72,9 @@ class GenericSQLDataSource(BaseDataSource):
         last_tracking_value: Optional[Any] = None,
         limit: int = 100
     ) -> List[DataRecord]:
-        safe_cols = ", ".join([f"{f}" for f in fields])
+        if not self.engine:
+            return []
+        safe_cols = ", ".join([f"{f}" for f in fields]) if fields else "*"
         safe_table = f"{table_name}"
         track_col = tracking_field or pk_field
 
@@ -58,7 +86,7 @@ class GenericSQLDataSource(BaseDataSource):
             order_clause = f"ORDER BY {track_col} ASC"
             bind_params["val"] = last_tracking_value
         else:
-            order_clause = f"ORDER BY {pk_field} DESC"
+            order_clause = f"ORDER BY {pk_field} DESC" if pk_field else ""
 
         bind_params["limit_val"] = limit
         query_str = f"SELECT {safe_cols} FROM {safe_table} {where_clause} {order_clause} LIMIT :limit_val"

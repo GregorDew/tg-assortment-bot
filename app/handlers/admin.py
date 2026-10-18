@@ -2,6 +2,7 @@ import html
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
+from sqlalchemy import select
 from app.config import settings
 from app.filters.admin import IsAdminFilter
 from app.database.database import async_session_maker
