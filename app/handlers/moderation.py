@@ -1,10 +1,14 @@
 import html
+import json
+from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
 from app.config import settings
 from app.filters.admin import IsAdminFilter
 from app.database.database import async_session_maker
+from app.database.models import Product, PendingPublicationModel, PublishRuleModel
 from app.services.product_service import ProductService
 from app.services.publisher import PublisherService
 from app.states.manual_post import EditProductFSM
@@ -13,6 +17,8 @@ from app.keyboards.admin_kb import (
     get_edit_menu_kb,
     get_cancel_edit_kb
 )
+from app.core.connectors.base import PreparedPost
+from app.core.rules.engine import dispatch_to_channels
 
 router = Router()
 router.callback_query.filter(IsAdminFilter())
@@ -29,12 +35,6 @@ async def process_publish_decision(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     item_id = int(callback.data.split(":")[2])
     admin_name = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {callback.from_user.id}"
-
-    from app.database.models import PendingPublicationModel, PublishRuleModel
-    from app.core.connectors.base import PreparedPost
-    from app.core.rules.engine import dispatch_to_channels
-    import json
-    from datetime import datetime
 
     async with async_session_maker() as session:
         # 1. Перевіряємо, чи це універсальна публікація з правил (PendingPublicationModel)
@@ -149,9 +149,6 @@ async def process_reject_decision(callback: CallbackQuery, state: FSMContext):
     item_id = int(callback.data.split(":")[2])
     admin_name = f"@{callback.from_user.username}" if callback.from_user.username else f"ID: {callback.from_user.id}"
 
-    from app.database.models import PendingPublicationModel
-    from datetime import datetime
-
     async with async_session_maker() as session:
         # Перевірка PendingPublicationModel
         res_pending = await session.execute(
@@ -222,7 +219,6 @@ async def open_edit_menu(callback: CallbackQuery):
     """Відкриває меню вибору поля для редагування."""
     item_id = int(callback.data.split(":")[2])
 
-    from app.database.models import PendingPublicationModel
     async with async_session_maker() as session:
         res_pending = await session.execute(
             select(PendingPublicationModel).where(PendingPublicationModel.id == item_id)
