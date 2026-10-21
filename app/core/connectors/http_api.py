@@ -53,15 +53,22 @@ class HttpApiPublisherConnector(BasePublisherConnector):
         return 0, "No response"
 
     async def test_connection(self) -> Tuple[bool, str]:
+        if not self.endpoint_url:
+            return False, "Не вказано endpoint_url. Потрібен ваш URL, який приймає JSON."
         try:
-            status, text = await self._request("HEAD" if self.method == "GET" else "OPTIONS", self.endpoint_url, {})
-            if status in (200, 204, 405):
-                return True, f"HTTP API доступний (Статус: {status})!"
-            # Спробуємо GET
-            status, text = await self._request("GET", self.endpoint_url, {})
-            if status < 500:
-                return True, f"HTTP API відповів зі статусом {status}!"
-            return False, f"Сервер повернув HTTP {status}: {text[:150]}"
+            probe = PreparedPost(
+                title="Тест підключення",
+                body="Тестовий запит від бота (поле extra_data.test=true).",
+                extra_data={"test": True},
+            )
+            result = await self.publish(probe)
+            if result.success:
+                return True, f"HTTP API прийняв тестовий запит ({self.method} {self.endpoint_url})."
+            return False, (
+                "Сервер не прийняв тестовий POST/запит. "
+                f"{result.error_message}\n"
+                "Бот не хостить HTTP API сам — потрібен ваш endpoint."
+            )
         except Exception as e:
             return False, f"Помилка з'єднання з HTTP API: {e}"
 

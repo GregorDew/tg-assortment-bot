@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
 def get_logs_menu_kb(filter_type: str = "all") -> InlineKeyboardMarkup:
-    """Клавіатура розділу Журнал і помилки."""
+    """Клавіатура журналу відправок."""
     all_btn = "• Всі •" if filter_type == "all" else "Всі"
     err_btn = "• Тільки помилки ❌ •" if filter_type == "failed" else "Тільки помилки ❌"
     succ_btn = "• Успішні ✅ •" if filter_type == "success" else "Успішні ✅"

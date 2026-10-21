@@ -40,10 +40,17 @@ class EmailPublisherConnector(BasePublisherConnector):
         return client
 
     async def test_connection(self) -> Tuple[bool, str]:
+        if not self.recipients:
+            return False, "Немає отримувачів. У кінці рядка вкажіть email через кому."
         try:
-            client = await self._get_client()
-            await client.quit()
-            return True, f"Успішно підключено до SMTP сервера {self.smtp_host}:{self.smtp_port}!"
+            probe = PreparedPost(
+                title="Тест SMTP від бота",
+                body="Якщо цей лист дійшов — Email-канал працює.",
+            )
+            result = await self.publish(probe)
+            if result.success:
+                return True, f"Тестовий лист надіслано через {self.smtp_host}:{self.smtp_port}."
+            return False, f"SMTP не відправив лист: {result.error_message}"
         except Exception as e:
             return False, f"Помилка підключення до SMTP: {e}"
 

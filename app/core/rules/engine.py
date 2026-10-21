@@ -138,7 +138,31 @@ async def dispatch_to_channels(
             select(PublishChannelModel).where(PublishChannelModel.id == ch_id)
         )
         channel = res.scalar_one_or_none()
-        if not channel or not channel.is_active:
+        if not channel:
+            log = DeliveryLogModel(
+                rule_id=rule_id,
+                source_id=source_id,
+                channel_id=ch_id,
+                record_id=record_id,
+                event_type=event_type,
+                status="failed",
+                error_message="Канал видалено з бота, але лишився в правилі."
+            )
+            session.add(log)
+            await session.commit()
+            continue
+        if not channel.is_active:
+            log = DeliveryLogModel(
+                rule_id=rule_id,
+                source_id=source_id,
+                channel_id=ch_id,
+                record_id=record_id,
+                event_type=event_type,
+                status="failed",
+                error_message="Канал вимкнено (ймовірно не пройшов тест публікації)."
+            )
+            session.add(log)
+            await session.commit()
             continue
 
         try:
@@ -165,6 +189,17 @@ async def dispatch_to_channels(
             connector = create_connector(channel.type, config, bot=bot)
         except Exception as conn_err:
             logger.error(f"Не вдалося створити конектор для каналу #{ch_id}: {conn_err}")
+            log = DeliveryLogModel(
+                rule_id=rule_id,
+                source_id=source_id,
+                channel_id=ch_id,
+                record_id=record_id,
+                event_type=event_type,
+                status="failed",
+                error_message=str(conn_err)
+            )
+            session.add(log)
+            await session.commit()
             continue
 
         # Публікуємо або оновлюємо
@@ -258,9 +293,14 @@ async def execute_publish_rule(session: AsyncSession, bot: Bot, rule: PublishRul
     channel_ids: List[int] = []
     if rule.channel_ids_json:
         try:
-            channel_ids = json.loads(rule.channel_ids_json)
+            channel_ids = [int(x) for x in json.loads(rule.channel_ids_json)]
         except Exception:
             channel_ids = []
+    if not channel_ids:
+        all_ch = list((await session.execute(
+            select(PublishChannelModel).where(PublishChannelModel.is_active.is_(True))
+        )).scalars().all())
+        channel_ids = [c.id for c in all_ch]
 
     trigger_events: List[str] = ["new"]
     if rule.trigger_events:
@@ -279,9 +319,9 @@ async def execute_publish_rule(session: AsyncSession, bot: Bot, rule: PublishRul
             select(ProcessedRecordModel).where(
                 ProcessedRecordModel.rule_id == rule.id,
                 ProcessedRecordModel.record_id == rec.id
-            )
+            ).order_by(ProcessedRecordModel.id.desc())
         )
-        proc_rec = proc_res.scalar_one_or_none()
+        proc_rec = proc_res.scalars().first()
 
         post = prepare_post_content(rec.data, template, rule.name)
 

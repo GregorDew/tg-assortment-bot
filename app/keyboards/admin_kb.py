@@ -11,12 +11,11 @@ def get_admin_main_kb(auto_post_enabled: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📢 Канали публікації", callback_data="menu:channels")
         ],
         [
-            InlineKeyboardButton(text="🔄 Правила та маршрути", callback_data="menu:rules"),
             InlineKeyboardButton(text="📝 Шаблони", callback_data="menu:templates")
         ],
         [
             InlineKeyboardButton(text="📦 Погодження", callback_data="menu:moderation"),
-            InlineKeyboardButton(text="📊 Журнал і помилки", callback_data="menu:logs")
+            InlineKeyboardButton(text="📊 Журнал дій", callback_data="menu:logs")
         ],
         [
             InlineKeyboardButton(text="📝 Створити пост вручну", callback_data="admin:create_post")
@@ -80,7 +79,7 @@ def get_preview_moderation_kb(product_id: int, manager_username: str | None = No
     # 2. Кнопки модерації
     keyboard.append([
         InlineKeyboardButton(
-            text="✅ Опублікувати в групу",
+            text="✅ Опублікувати в канали",
             callback_data=f"mod:publish:{product_id}"
         ),
         InlineKeyboardButton(

@@ -140,37 +140,43 @@ async def callback_back_to_main(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu:moderation")
 async def callback_moderation_queue(callback: CallbackQuery):
-    """Розділ черги погодження публікацій."""
+    """Черга погодження: показує наступний необроблений товар."""
     from app.database.models import PendingPublicationModel, Product
+    from app.handlers.moderation import send_next_queue_item
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
     async with async_session_maker() as session:
-        # 1. Нові записи з правил
         res_pending = await session.execute(
             select(PendingPublicationModel).where(PendingPublicationModel.status == "pending")
         )
         pendings = list(res_pending.scalars().all())
-
-        # 2. Наявні товари
         res_prod = await session.execute(
             select(Product).where(Product.status.in_(("pending", "waiting_approval")))
         )
         prods = list(res_prod.scalars().all())
 
     total_waiting = len(pendings) + len(prods)
+    from app.keyboards.admin_kb import get_back_to_main_kb
     if total_waiting == 0:
-        text = "📦 <b>Черга погодження</b>\n\n✅ Усі публікації розглянуто. Немає записів, які очікують підтвердження."
-        from app.keyboards.admin_kb import get_back_to_main_kb
+        text = "📦 <b>Черга погодження</b>\n\n✅ Немає необроблених товарів."
         await callback.message.edit_text(text, reply_markup=get_back_to_main_kb(), parse_mode="HTML")
         await callback.answer()
         return
 
     text = (
-        f"📦 <b>Черга погодження ({total_waiting} очікують):</b>\n\n"
-        f"• Нових надходжень із зовнішніх джерел: <b>{len(pendings)}</b>\n"
-        f"• Товарів на модерації: <b>{len(prods)}</b>\n\n"
-        "Усі картки для погодження надіслані вам у приватні повідомлення з кнопками "
-        "«✅ Опублікувати», «❌ Відхилити» та «✏️ Редагувати»."
+        f"📦 <b>Черга погодження: {total_waiting}</b>\n\n"
+        f"• Товари бота: <b>{len(prods)}</b>\n"
+        f"• Записи з джерел: <b>{len(pendings)}</b>\n\n"
+        "Нижче надішлю перший необроблений. Після «Опублікувати» або «Відхилити» "
+        "з'явиться наступний. Старе повідомлення повторно нічого не відправить."
     )
-    from app.keyboards.admin_kb import get_back_to_main_kb
-    await callback.message.edit_text(text, reply_markup=get_back_to_main_kb(), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="▶️ Показати наступний", callback_data="mod:queue:next")],
+            [InlineKeyboardButton(text="🔙 До головного меню", callback_data="menu:main")],
+        ]
+    )
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
+    await send_next_queue_item(callback.bot, callback.from_user.id)
 

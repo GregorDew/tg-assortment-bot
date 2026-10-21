@@ -1,6 +1,9 @@
 from typing import Any, Dict, Optional, Tuple
+
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
 from app.config import settings
 from app.core.connectors.base import BasePublisherConnector, PreparedPost, PublishResult
 
@@ -26,89 +29,137 @@ class TelegramPublisherConnector(BasePublisherConnector):
         if not manager_url:
             return None
         return InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="💬 Написати продавцю", url=manager_url)]
-            ]
+            inline_keyboard=[[InlineKeyboardButton(text="💬 Написати продавцю", url=manager_url)]]
         )
 
-    async def test_connection(self) -> Tuple[bool, str]:
+    async def _check_post_rights(self) -> Tuple[bool, str]:
         try:
             chat = await self.bot.get_chat(chat_id=self.chat_id)
-            title = chat.title or chat.username or str(chat.id)
-            return True, f"Успішно підключено до Telegram-чату: «{title}»!"
-        except Exception as e:
-            return False, f"Помилка доступу до Telegram-чату {self.chat_id}: {e}"
+        except Exception as exc:
+            return False, f"Не вдалося відкрити чат {self.chat_id}: {exc}"
+
+        title = chat.title or chat.username or str(chat.id)
+        resolved_id = chat.id
+        me = await self.bot.get_me()
+        try:
+            member = await self.bot.get_chat_member(chat_id=resolved_id, user_id=me.id)
+        except Exception as exc:
+            return False, (
+                f"Чат «{title}» знайдено, але бота там немає або немає прав. "
+                f"Додайте @{me.username} адміністратором з правом публікації. Деталі: {exc}"
+            )
+
+        status = getattr(member, "status", None)
+        if status in ("left", "kicked"):
+            return False, (
+                f"Бот не є учасником «{title}». Додайте @{me.username} у канал/групу "
+                "як адміністратора з правом «Публікація повідомлень»."
+            )
+
+        chat_type = getattr(chat, "type", "")
+        if chat_type == "channel":
+            can_post = bool(getattr(member, "can_post_messages", False))
+            if status != "administrator" or not can_post:
+                return False, (
+                    f"Бот бачить канал «{title}», але НЕ може публікувати.\n"
+                    f"1) Додайте @{me.username} в адміністратори каналу.\n"
+                    "2) Увімкніть право «Публікація повідомлень».\n"
+                    "Перевірка з'єднання без тестового посту раніше це пропускала."
+                )
+
+        self.chat_id = resolved_id
+        return True, f"Успішно: «{title}» (id={resolved_id}). Бот може публікувати."
+
+    async def test_connection(self) -> Tuple[bool, str]:
+        ok, msg = await self._check_post_rights()
+        if not ok:
+            return False, msg
+        probe = PreparedPost(
+            title="Тест підключення",
+            body=(
+                "✅ <b>Тестове повідомлення від бота</b>\n"
+                "Якщо ви це бачите в каналі — публікація працює.\n"
+                "Далі сюди приходитимуть погоджені пости."
+            ),
+        )
+        result = await self.publish(probe)
+        if not result.success:
+            return False, f"Права ніби є, але відправка не вдалася: {result.error_message}"
+        return True, msg + " Тестовий пост надіслано в канал."
+
+    async def _send(self, post: PreparedPost, parse_mode: Optional[str]) -> Any:
+        reply_markup = self._build_keyboard(post.manager_button_url)
+        caption = post.body
+        if (post.photo_file_id or post.photo_url) and caption and len(caption) > 1024:
+            caption = caption[:1000] + "…"
+        if post.photo_file_id:
+            return await self.bot.send_photo(
+                chat_id=self.chat_id,
+                photo=post.photo_file_id,
+                caption=caption,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        if post.photo_url:
+            return await self.bot.send_photo(
+                chat_id=self.chat_id,
+                photo=post.photo_url,
+                caption=caption,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        return await self.bot.send_message(
+            chat_id=self.chat_id,
+            text=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
 
     async def publish(self, post: PreparedPost) -> PublishResult:
         try:
-            reply_markup = self._build_keyboard(post.manager_button_url)
-            caption = post.body
-
-            # 1. Якщо є Telegram file_id
-            if post.photo_file_id:
-                msg = await self.bot.send_photo(
-                    chat_id=self.chat_id,
-                    photo=post.photo_file_id,
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
-            # 2. Якщо є URL фото
-            elif post.photo_url:
-                msg = await self.bot.send_photo(
-                    chat_id=self.chat_id,
-                    photo=post.photo_url,
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
-            # 3. Текстове повідомлення
-            else:
-                msg = await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=caption,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
-
+            try:
+                msg = await self._send(post, "HTML")
+            except TelegramBadRequest as parse_err:
+                if "parse" in str(parse_err).lower() or "entities" in str(parse_err).lower():
+                    msg = await self._send(post, None)
+                else:
+                    raise
             return PublishResult(
                 success=True,
                 external_id=str(msg.message_id),
-                raw_response=f"Telegram message_id={msg.message_id}"
+                raw_response=f"Telegram message_id={msg.message_id} chat={self.chat_id}",
             )
-        except Exception as e:
-            return PublishResult(success=False, error_message=str(e))
+        except (TelegramBadRequest, TelegramForbiddenError, Exception) as exc:
+            return PublishResult(success=False, error_message=str(exc))
 
     async def update(self, external_id: str, post: PreparedPost) -> PublishResult:
         try:
             msg_id = int(external_id)
             reply_markup = self._build_keyboard(post.manager_button_url)
             try:
-                # Спробуємо оновити як підпис фото
                 await self.bot.edit_message_caption(
                     chat_id=self.chat_id,
                     message_id=msg_id,
                     caption=post.body,
                     parse_mode="HTML",
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
                 )
             except Exception:
-                # Якщо це було суто текстове повідомлення
                 await self.bot.edit_message_text(
                     chat_id=self.chat_id,
                     message_id=msg_id,
                     text=post.body,
                     parse_mode="HTML",
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
                 )
             return PublishResult(success=True, external_id=external_id)
-        except Exception as e:
-            return PublishResult(success=False, error_message=str(e))
+        except Exception as exc:
+            return PublishResult(success=False, error_message=str(exc))
 
     async def delete(self, external_id: str) -> PublishResult:
         try:
             msg_id = int(external_id)
             await self.bot.delete_message(chat_id=self.chat_id, message_id=msg_id)
             return PublishResult(success=True, external_id=external_id)
-        except Exception as e:
-            return PublishResult(success=False, error_message=str(e))
+        except Exception as exc:
+            return PublishResult(success=False, error_message=str(exc))

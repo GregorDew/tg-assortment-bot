@@ -41,7 +41,7 @@ def get_channel_manage_kb(channel_id: int, is_active: bool) -> InlineKeyboardMar
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🔄 Тест з'єднання", callback_data=f"chn_action:test:{channel_id}"),
+                InlineKeyboardButton(text="📨 Тестовий пост", callback_data=f"chn_action:test:{channel_id}"),
                 InlineKeyboardButton(text=status_text, callback_data=f"chn_action:toggle:{channel_id}")
             ],
             [

@@ -1,16 +1,16 @@
-import json
+import html
 import logging
-from aiogram import Router, F
-from aiogram.types import CallbackQuery
-from sqlalchemy import select, desc
+from datetime import datetime
 
-from app.filters.admin import IsAdminFilter
+from aiogram import F, Router
+from aiogram.types import CallbackQuery
+from sqlalchemy import select
+
 from app.database.database import async_session_maker
-from app.database.models import DeliveryLogModel, PublishRuleModel, PublishChannelModel, ProcessedRecordModel
-from app.core.connectors.base import PreparedPost, PublishResult
-from app.core.connectors.factory import create_connector
-from app.core.security import decrypt_secret
+from app.database.models import DeliveryLogModel, Product, PublishChannelModel
+from app.filters.admin import IsAdminFilter
 from app.keyboards.logs_kb import get_logs_menu_kb
+from app.services.delivery import product_to_prepared_post, publish_to_channel
 
 logger = logging.getLogger(__name__)
 
@@ -18,102 +18,146 @@ router = Router()
 router.message.filter(IsAdminFilter())
 router.callback_query.filter(IsAdminFilter())
 
+STATUS_LABEL = {
+    "success": "✅ Успіх",
+    "failed": "❌ Помилка",
+    "pending_approval": "⏳ Погодження",
+    "skipped": "⏭ Пропуск",
+}
+
+
+def _format_log_line(entry: DeliveryLogModel) -> str:
+    ts = entry.created_at.strftime("%d.%m %H:%M") if entry.created_at else "—"
+    status = STATUS_LABEL.get(entry.status, entry.status)
+    channel = f"канал #{entry.channel_id}" if entry.channel_id else "без каналу"
+    rec = f"запис {html.escape(str(entry.record_id))}" if entry.record_id else "—"
+    line = f"• <code>{ts}</code> {status} | {channel} | {rec} | <code>{entry.event_type}</code>"
+    if entry.external_message_id and entry.status == "success":
+        line += f"\n   id повідомлення: <code>{html.escape(str(entry.external_message_id))}</code>"
+    if entry.error_message:
+        err = html.escape(entry.error_message[:280])
+        line += f"\n   {err}"
+    return line
+
 
 @router.callback_query(F.data == "menu:logs")
 @router.callback_query(F.data.startswith("logs:filter:"))
 async def show_logs(callback: CallbackQuery):
-    filter_type = callback.data.split(":")[2] if ":" in callback.data and callback.data.startswith("logs:filter:") else "all"
+    filter_type = "all"
+    if callback.data.startswith("logs:filter:"):
+        filter_type = callback.data.split(":")[2]
 
     async with async_session_maker() as session:
-        query = select(DeliveryLogModel).order_by(desc(DeliveryLogModel.created_at)).limit(10)
-        if filter_type == "failed":
-            query = query.where(DeliveryLogModel.status == "failed")
-        elif filter_type == "success":
-            query = query.where(DeliveryLogModel.status == "success")
+        stmt = select(DeliveryLogModel).order_by(DeliveryLogModel.id.desc()).limit(20)
+        if filter_type in ("failed", "success"):
+            stmt = (
+                select(DeliveryLogModel)
+                .where(DeliveryLogModel.status == filter_type)
+                .order_by(DeliveryLogModel.id.desc())
+                .limit(20)
+            )
+        entries = list((await session.execute(stmt)).scalars().all())
+        failed_count = len(
+            list(
+                (
+                    await session.execute(
+                        select(DeliveryLogModel).where(DeliveryLogModel.status == "failed")
+                    )
+                ).scalars().all()
+            )
+        )
 
-        res = await session.execute(query)
-        logs = list(res.scalars().all())
-
-    if not logs:
-        text = f"📊 <b>Журнал операцій та помилок ({filter_type})</b>\n\nЗаписів не знайдено."
+    title_map = {"all": "усі", "failed": "помилки", "success": "успішні"}
+    title = title_map.get(filter_type, filter_type)
+    if not entries:
+        text = (
+            f"📊 <b>Журнал дій ({title})</b>\n\n"
+            "Записів немає. Журнал з'являється після спроби публікації: "
+            "погодження товару, автопост або тест каналу."
+        )
         await callback.message.edit_text(text, reply_markup=get_logs_menu_kb(filter_type), parse_mode="HTML")
         await callback.answer()
         return
 
-    lines = [f"📊 <b>Журнал операцій та помилок (Фільтр: {filter_type}):</b>\n"]
-    for l in logs:
-        status_ico = "✅" if l.status == "success" else ("❌" if l.status == "failed" else "⏳")
-        err_info = f"\n   ⚠️ <i>{l.error_message[:60]}...</i>" if l.error_message else ""
-        time_str = l.created_at.strftime('%m-%d %H:%M:%S')
-        lines.append(
-            f"{status_ico} <b>[{time_str}]</b> Правило #{l.rule_id or '—'} ──> Канал #{l.channel_id or '—'}\n"
-            f"   Запис ID: <code>{l.record_id or '—'}</code> | Подія: <code>{l.event_type}</code> | Спроб: {l.attempts}"
-            f"{err_info}\n"
-        )
-
+    lines = [f"📊 <b>Журнал дій ({title})</b>", f"Невиправлених помилок у базі: <b>{failed_count}</b>\n"]
+    lines.extend(_format_log_line(e) for e in entries)
     text = "\n".join(lines)
+    if len(text) > 3800:
+        text = text[:3800] + "\n…"
     await callback.message.edit_text(text, reply_markup=get_logs_menu_kb(filter_type), parse_mode="HTML")
     await callback.answer()
 
 
 @router.callback_query(F.data == "logs:retry_failed")
 async def retry_failed_deliveries(callback: CallbackQuery):
-    await callback.answer("⏳ Повторне виконання помилкових операцій...", show_alert=False)
-
-    retried_count = 0
-    success_count = 0
+    await callback.answer("Повторюю невдалі відправки...")
+    success = 0
+    processed = 0
+    notes = []
 
     async with async_session_maker() as session:
-        res = await session.execute(
-            select(DeliveryLogModel)
-            .where(DeliveryLogModel.status == "failed")
-            .order_by(desc(DeliveryLogModel.created_at))
-            .limit(10)
-        )
-        failed_logs = list(res.scalars().all())
-
-        for log in failed_logs:
-            if not log.channel_id or not log.rule_id:
-                continue
-
-            retried_count += 1
-            # Завантажуємо канал
-            ch_res = await session.execute(
-                select(PublishChannelModel).where(PublishChannelModel.id == log.channel_id)
-            )
-            channel = ch_res.scalar_one_or_none()
-            if not channel or not channel.is_active:
-                continue
-
-            try:
-                cfg = json.loads(decrypt_secret(channel.config_json))
-                connector = create_connector(channel.type, cfg, bot=callback.bot)
-
-                # Формуємо базовий пост для повтору
-                post = PreparedPost(
-                    title="Повторна публікація",
-                    body=f"Повторне відправлення запису #{log.record_id}"
+        failed = list(
+            (
+                await session.execute(
+                    select(DeliveryLogModel)
+                    .where(DeliveryLogModel.status == "failed")
+                    .order_by(DeliveryLogModel.id.desc())
+                    .limit(30)
                 )
-                pub_result = await connector.publish(post)
+            ).scalars().all()
+        )
+        for entry in failed:
+            processed += 1
+            if not entry.channel_id or not entry.record_id:
+                notes.append(f"#{entry.id}: немає каналу або запису")
+                continue
+            channel = (
+                await session.execute(
+                    select(PublishChannelModel).where(PublishChannelModel.id == entry.channel_id)
+                )
+            ).scalar_one_or_none()
+            if not channel or not channel.is_active:
+                notes.append(f"#{entry.id}: канал вимкнено або видалено")
+                continue
 
-                log.attempts += 1
-                if pub_result.success:
-                    success_count += 1
-                    log.status = "success"
-                    log.error_message = None
-                    log.external_message_id = pub_result.external_id
-                else:
-                    log.error_message = pub_result.error_message
+            post = None
+            if entry.event_type == "product" and str(entry.record_id).isdigit():
+                product = (
+                    await session.execute(select(Product).where(Product.id == int(entry.record_id)))
+                ).scalar_one_or_none()
+                if product:
+                    post = product_to_prepared_post(product)
+            if post is None:
+                notes.append(f"#{entry.id}: не можу відновити текст посту")
+                continue
 
+            result, _ = await publish_to_channel(
+                session,
+                callback.bot,
+                channel,
+                post,
+                record_id=str(entry.record_id),
+                event_type=f"retry:{entry.event_type}",
+            )
+            if result.success:
+                success += 1
+                entry.status = "success"
+                entry.error_message = None
+                entry.external_message_id = result.external_id
+                entry.updated_at = datetime.utcnow()
+                entry.attempts = (entry.attempts or 1) + 1
                 await session.commit()
-            except Exception as e:
-                log.attempts += 1
-                log.error_message = f"Помилка повтору: {e}"
+            else:
+                entry.attempts = (entry.attempts or 1) + 1
+                entry.error_message = result.error_message
+                entry.updated_at = datetime.utcnow()
                 await session.commit()
+                notes.append(f"#{entry.id}: {result.error_message}")
 
+    extra = ("\n" + "\n".join(notes[:8])) if notes else ""
     await callback.message.answer(
-        f"🔁 <b>Результати повторної спроби:</b>\n"
-        f"Оброблено помилок: {retried_count}\n"
-        f"Успішно відправлено: {success_count}",
-        parse_mode="HTML"
+        f"🔁 <b>Повтор відправок</b>\nОброблено помилок: {processed}\nУспішно: {success}{extra}",
+        parse_mode="HTML",
     )
+    callback.data = "logs:filter:failed"
+    await show_logs(callback)

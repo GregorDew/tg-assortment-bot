@@ -45,30 +45,20 @@ class DiscordPublisherConnector(BasePublisherConnector):
 
     async def test_connection(self) -> Tuple[bool, str]:
         try:
-            if self.webhook_url:
-                is_safe, err_msg = validate_safe_url(self.webhook_url)
-                if not is_safe:
-                    return False, err_msg
+            if not self.webhook_url and not (self.bot_token and self.channel_id):
+                return False, (
+                    "Немає Webhook URL. У Discord: канал → Integrations → Webhooks → Copy URL. "
+                    "Окремий Discord-бот для цього проєкту не обов'язковий."
+                )
 
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(self.webhook_url) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            channel_name = data.get("name", "Discord Webhook")
-                            return True, f"Успішно підключено до Discord Webhook: «{channel_name}»!"
-                        return False, f"Помилка перевірки Discord Webhook: HTTP {resp.status}"
-
-            elif self.bot_token and self.channel_id:
-                url = f"https://discord.com/api/v10/channels/{self.channel_id}"
-                headers = {"Authorization": f"Bot {self.bot_token}"}
-                status, data, text = await self._send_with_retry("GET", url, {}, headers)
-                if status == 200:
-                    ch_name = data.get("name", self.channel_id)
-                    return True, f"Успішно підключено до каналу Discord #{ch_name}!"
-                return False, f"Помилка Discord Bot API: HTTP {status} ({text[:100]})"
-
-            return False, "Не вказано Webhook URL або Bot Token + Channel ID"
+            probe = PreparedPost(
+                title="Тест підключення",
+                body="Тестове повідомлення від бота. Якщо воно є в Discord — публікація працює.",
+            )
+            result = await self.publish(probe)
+            if result.success:
+                return True, "Discord прийняв тестове повідомлення."
+            return False, f"Discord не прийняв повідомлення: {result.error_message}"
         except Exception as e:
             return False, f"Помилка підключення до Discord: {e}"
 
