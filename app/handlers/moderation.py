@@ -157,15 +157,6 @@ async def process_publish_decision(callback: CallbackQuery):
             return
 
         if _pending_is_open(pending):
-            rule = (
-                await session.execute(select(PublishRuleModel).where(PublishRuleModel.id == pending.rule_id))
-            ).scalar_one_or_none()
-            channel_ids = []
-            if rule and rule.channel_ids_json:
-                try:
-                    channel_ids = [int(x) for x in json.loads(rule.channel_ids_json)]
-                except Exception:
-                    channel_ids = []
             prepared = {}
             try:
                 prepared = json.loads(pending.prepared_data_json or "{}")
@@ -177,48 +168,20 @@ async def process_publish_decision(callback: CallbackQuery):
                 photo_url=prepared.get("photo_url"),
                 manager_button_url=prepared.get("manager_button_url"),
             )
-            if channel_ids:
-                ext_ids = await dispatch_to_channels(
-                    session=session,
-                    bot=callback.bot,
-                    channel_ids=channel_ids,
-                    post=post,
-                    rule_id=pending.rule_id,
-                    source_id=pending.source_id,
-                    record_id=pending.record_id,
-                    event_type=pending.event_type or "new",
-                )
-                ok = bool(ext_ids)
-                reports = [f"Канали правила: {channel_ids}", f"Результат id: {ext_ids or 'порожньо'}"]
-                if not ok:
-                    # Fallback: усі активні канали, якщо правило нічого не відправило
-                    outcome = await broadcast_post(
-                        session,
-                        callback.bot,
-                        post,
-                        record_id=str(pending.record_id),
-                        event_type="pending",
-                    )
-                    report = format_broadcast_report(
-                        f"{'✅' if outcome['ok'] else '❌'} Запис джерела #{pending.id}",
-                        outcome,
-                    )
-                    ok = outcome["ok"]
-                else:
-                    report = "✅ Запис джерела опубліковано в канали правила.\n" + "\n".join(reports)
-            else:
-                outcome = await broadcast_post(
-                    session,
-                    callback.bot,
-                    post,
-                    record_id=str(pending.record_id),
-                    event_type="pending",
-                )
-                report = format_broadcast_report(
-                    f"{'✅' if outcome['ok'] else '❌'} Запис джерела #{pending.id}",
-                    outcome,
-                )
-                ok = outcome["ok"]
+
+            # Публікуємо у всі активні канали з детальною перевіркою кожного
+            outcome = await broadcast_post(
+                session,
+                callback.bot,
+                post,
+                record_id=str(pending.record_id),
+                event_type="pending",
+            )
+            report = format_broadcast_report(
+                f"{'✅' if outcome['ok'] else '❌'} Запис #{pending.id} «{post.title or 'Без назви'}»",
+                outcome,
+            )
+            ok = outcome["ok"]
 
             if ok:
                 pending.status = "published"

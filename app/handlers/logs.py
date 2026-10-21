@@ -26,17 +26,20 @@ STATUS_LABEL = {
 }
 
 
-def _format_log_line(entry: DeliveryLogModel) -> str:
+def _format_log_line(entry: DeliveryLogModel, channel_map: dict = None) -> str:
     ts = entry.created_at.strftime("%d.%m %H:%M") if entry.created_at else "—"
     status = STATUS_LABEL.get(entry.status, entry.status)
-    channel = f"канал #{entry.channel_id}" if entry.channel_id else "без каналу"
-    rec = f"запис {html.escape(str(entry.record_id))}" if entry.record_id else "—"
-    line = f"• <code>{ts}</code> {status} | {channel} | {rec} | <code>{entry.event_type}</code>"
+    ch_name = ""
+    if channel_map and entry.channel_id in channel_map:
+        ch_name = f" «{html.escape(channel_map[entry.channel_id])}»"
+    channel = f"канал #{entry.channel_id}{ch_name}" if entry.channel_id else "без каналу"
+    rec = f"товар/запис #{html.escape(str(entry.record_id))}" if entry.record_id else "—"
+    line = f"• <code>{ts}</code> {status} | {channel} | {rec}"
     if entry.external_message_id and entry.status == "success":
-        line += f"\n   id повідомлення: <code>{html.escape(str(entry.external_message_id))}</code>"
+        line += f"\n   ✅ Опубліковано (id повідомлення: <code>{html.escape(str(entry.external_message_id))}</code>)"
     if entry.error_message:
         err = html.escape(entry.error_message[:280])
-        line += f"\n   {err}"
+        line += f"\n   ❌ Помилка: <i>{err}</i>"
     return line
 
 
@@ -48,6 +51,10 @@ async def show_logs(callback: CallbackQuery):
         filter_type = callback.data.split(":")[2]
 
     async with async_session_maker() as session:
+        # Завантажуємо карту назв каналів
+        all_channels = (await session.execute(select(PublishChannelModel))).scalars().all()
+        channel_map = {c.id: c.name for c in all_channels}
+
         stmt = select(DeliveryLogModel).order_by(DeliveryLogModel.id.desc()).limit(20)
         if filter_type in ("failed", "success"):
             stmt = (
@@ -80,7 +87,7 @@ async def show_logs(callback: CallbackQuery):
         return
 
     lines = [f"📊 <b>Журнал дій ({title})</b>", f"Невиправлених помилок у базі: <b>{failed_count}</b>\n"]
-    lines.extend(_format_log_line(e) for e in entries)
+    lines.extend(_format_log_line(e, channel_map) for e in entries)
     text = "\n".join(lines)
     if len(text) > 3800:
         text = text[:3800] + "\n…"

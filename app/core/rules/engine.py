@@ -23,6 +23,7 @@ from app.database.models import (
     ProcessedRecordModel
 )
 from app.keyboards.admin_kb import get_preview_moderation_kb
+from app.services.delivery import explain_telegram_error
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,12 @@ async def dispatch_to_channels(
             select(PublishChannelModel).where(PublishChannelModel.id == ch_id)
         )
         channel = res.scalar_one_or_none()
+        ch_label = f"#{ch_id}"
+        if channel:
+            ch_label = f"#{channel.id} «{channel.name}»"
+
         if not channel:
+            err_msg = f"Канал {ch_label} видалено з бота."
             log = DeliveryLogModel(
                 rule_id=rule_id,
                 source_id=source_id,
@@ -146,12 +152,13 @@ async def dispatch_to_channels(
                 record_id=record_id,
                 event_type=event_type,
                 status="failed",
-                error_message="Канал видалено з бота, але лишився в правилі."
+                error_message=err_msg
             )
             session.add(log)
             await session.commit()
             continue
         if not channel.is_active:
+            err_msg = f"Канал {ch_label} вимкнено в налаштуваннях."
             log = DeliveryLogModel(
                 rule_id=rule_id,
                 source_id=source_id,
@@ -159,7 +166,7 @@ async def dispatch_to_channels(
                 record_id=record_id,
                 event_type=event_type,
                 status="failed",
-                error_message="Канал вимкнено (ймовірно не пройшов тест публікації)."
+                error_message=err_msg
             )
             session.add(log)
             await session.commit()
@@ -170,7 +177,7 @@ async def dispatch_to_channels(
             decrypted_cfg_str = decrypt_secret(channel.config_json)
             config = json.loads(decrypted_cfg_str)
         except Exception as cfg_err:
-            logger.error(f"Помилка конфігурації каналу #{ch_id}: {cfg_err}")
+            logger.error(f"Помилка конфігурації каналу {ch_label}: {cfg_err}")
             log = DeliveryLogModel(
                 rule_id=rule_id,
                 source_id=source_id,
@@ -188,7 +195,7 @@ async def dispatch_to_channels(
         try:
             connector = create_connector(channel.type, config, bot=bot)
         except Exception as conn_err:
-            logger.error(f"Не вдалося створити конектор для каналу #{ch_id}: {conn_err}")
+            logger.error(f"Не вдалося створити конектор для каналу {ch_label}: {conn_err}")
             log = DeliveryLogModel(
                 rule_id=rule_id,
                 source_id=source_id,
@@ -211,6 +218,11 @@ async def dispatch_to_channels(
         else:
             pub_result = await connector.publish(post)
 
+        err_text = None
+        if not pub_result.success:
+            raw_err = pub_result.error_message or "Невідома помилка"
+            err_text = explain_telegram_error(raw_err) if channel.type == "telegram" else raw_err
+
         # Журналювання результату
         log = DeliveryLogModel(
             rule_id=rule_id,
@@ -219,7 +231,7 @@ async def dispatch_to_channels(
             record_id=record_id,
             event_type=event_type,
             status="success" if pub_result.success else "failed",
-            error_message=pub_result.error_message,
+            error_message=err_text,
             external_message_id=pub_result.external_id or ext_msg_id
         )
         session.add(log)
