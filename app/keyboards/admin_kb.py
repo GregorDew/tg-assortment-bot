@@ -11,10 +11,10 @@ def get_admin_main_kb(auto_post_enabled: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📢 Канали публікації", callback_data="menu:channels")
         ],
         [
-            InlineKeyboardButton(text="📝 Шаблони", callback_data="menu:templates")
+            InlineKeyboardButton(text="📦 Погодження", callback_data="menu:moderation")
         ],
         [
-            InlineKeyboardButton(text="📦 Погодження", callback_data="menu:moderation"),
+            InlineKeyboardButton(text="📝 Шаблони", callback_data="menu:templates"),
             InlineKeyboardButton(text="📊 Журнал дій", callback_data="menu:logs")
         ],
         [

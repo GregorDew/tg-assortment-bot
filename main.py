@@ -67,15 +67,9 @@ async def main():
         seconds=settings.DB_CHECK_INTERVAL_SECONDS,
         args=[bot]
     )
-    scheduler.add_job(
-        check_and_execute_publish_rules,
-        trigger="interval",
-        seconds=15,
-        args=[bot]
-    )
     scheduler.start()
     logger.info(
-        f"Фоновий моніторинг БД запущено ({settings.DB_CHECK_INTERVAL_SECONDS}с) та універсальних правил (15с)."
+        f"Фоновий моніторинг БД запущено ({settings.DB_CHECK_INTERVAL_SECONDS}с)."
     )
 
     try:
