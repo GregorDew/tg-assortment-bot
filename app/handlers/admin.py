@@ -66,7 +66,8 @@ async def callback_add_test_product(callback: CallbackQuery):
     title = f"Тестовий товар #{item_num}"
     description = "Чудовий зразок товару, що надійшов у базі даних. Тестування роботи системи."
     price = f"{item_num * 5} грн"
-    photo_url = "https://picsum.photos/600/400"  # Тестове безкоштовне зображення
+    # Пряме стабільне зображення без 302-редиректів, яке завжди валідно підвантажується в Discord
+    photo_url = "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop"
 
     async with async_session_maker() as session:
         product = await ProductService.create_product(

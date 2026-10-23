@@ -1,8 +1,44 @@
 import asyncio
+import html
+import re
 import aiohttp
 from typing import Any, Dict, Optional, Tuple
 from app.core.connectors.base import BasePublisherConnector, PreparedPost, PublishResult
 from app.core.security import validate_safe_url
+
+
+def html_to_discord_markdown(text: str) -> str:
+    """Конвертує HTML-розмітку (яка використовується в Telegram) у Markdown для Discord."""
+    if not text:
+        return ""
+
+    s = text
+
+    # Заміна посилань <a href="...">...</a> на [текст](url)
+    s = re.sub(r'<a\s+href=["\']([^"\']+)["\']>([\s\S]*?)</a>', r'[\2](\1)', s, flags=re.IGNORECASE)
+
+    # Заміна жирного тексту
+    s = re.sub(r'<(?:b|strong)>([\s\S]*?)</(?:b|strong)>', r'**\1**', s, flags=re.IGNORECASE)
+
+    # Заміна курсиву
+    s = re.sub(r'<(?:i|em)>([\s\S]*?)</(?:i|em)>', r'*\1*', s, flags=re.IGNORECASE)
+
+    # Заміна коду
+    s = re.sub(r'<code>([\s\S]*?)</code>', r'`\1`', s, flags=re.IGNORECASE)
+    s = re.sub(r'<pre>([\s\S]*?)</pre>', r'```\n\1\n```', s, flags=re.IGNORECASE)
+
+    # Заміна підкресленого та закресленого тексту
+    s = re.sub(r'<u>([\s\S]*?)</u>', r'__\1__', s, flags=re.IGNORECASE)
+    s = re.sub(r'<(?:s|strike|del)>([\s\S]*?)</(?:s|strike|del)>', r'~~\1~~', s, flags=re.IGNORECASE)
+
+    # Очистка всіх інших залишкових HTML тегів
+    s = re.sub(r'<br\s*/?>', '\n', s, flags=re.IGNORECASE)
+    s = re.sub(r'</?[a-zA-Z0-9]+(?:\s+[^>]*)?>', '', s)
+
+    # Декодування HTML-сутностей (&amp;, &lt;, &gt;, &quot;, &#39;, тощо)
+    s = html.unescape(s)
+
+    return s.strip()
 
 
 class DiscordPublisherConnector(BasePublisherConnector):
@@ -63,21 +99,44 @@ class DiscordPublisherConnector(BasePublisherConnector):
             return False, f"Помилка підключення до Discord: {e}"
 
     def _build_payload(self, post: PreparedPost) -> Dict[str, Any]:
+        # Конвертуємо body з Telegram HTML у чистий Discord Markdown
+        formatted_body = html_to_discord_markdown(post.body or "")
+
+        # Додаємо клікабельне посилання на замовлення прямо в опис embed
+        if post.manager_button_url:
+            manager_link = post.manager_button_url.strip()
+            formatted_body += f"\n\n💬 **[Написати продавцю / Замовити]({manager_link})**"
+
         embed: Dict[str, Any] = {
             "title": post.title or "Оновлення асортименту",
-            "description": post.body,
-            "color": 0x3498DB
+            "description": formatted_body,
+            "color": 0x2ECC71  # Приємний зелений або смарагдовий колір
         }
 
         if post.photo_url:
-            embed["image"] = {"url": post.photo_url}
-
-        if post.manager_button_url:
-            embed["footer"] = {"text": f"Замовити: {post.manager_button_url}"}
+            embed["image"] = {"url": post.photo_url.strip()}
 
         payload: Dict[str, Any] = {
             "embeds": [embed]
         }
+
+        # Додаємо інтерактивну кнопку-посилання (Discord ActionRow component)
+        if post.manager_button_url:
+            manager_link = post.manager_button_url.strip()
+            payload["components"] = [
+                {
+                    "type": 1,  # ActionRow
+                    "components": [
+                        {
+                            "type": 2,  # Button
+                            "style": 5,  # Link button
+                            "label": "💬 Написати продавцю",
+                            "url": manager_link
+                        }
+                    ]
+                }
+            ]
+
         if self.username:
             payload["username"] = self.username
         if self.avatar_url:
