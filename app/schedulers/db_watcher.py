@@ -113,6 +113,9 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                     fields = json.loads(src.selected_fields)
                 except Exception:
                     fields = []
+            # Завжди додаємо photo_blob, якщо таблиця містить бінарне зображення
+            if fields and "photo_blob" not in fields:
+                fields.append("photo_blob")
 
             # Отримуємо всі наявні записи з джерела
             records = await adapter.fetch_records(
