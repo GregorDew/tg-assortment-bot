@@ -5,9 +5,11 @@ from aiogram import Bot
 from sqlalchemy import select
 from app.config import settings
 from app.database.database import async_session_maker
-from app.database.models import Product, DataSourceModel
+from app.database.models import Product, DataSourceModel, DeliveryLogModel, PublishChannelModel
 from app.core.security import decrypt_secret
 from app.core.sources.factory import create_data_source
+from app.core.connectors.factory import create_connector
+from app.core.connectors.base import PreparedPost
 from app.services.settings_service import SettingsService
 from app.services.product_service import ProductService
 from app.services.publisher import PublisherService
@@ -17,10 +19,78 @@ from app.keyboards.admin_kb import get_preview_moderation_kb
 logger = logging.getLogger(__name__)
 
 
+async def handle_deleted_products(session, bot: Bot, src: DataSourceModel, existing_external_ids: set) -> None:
+    """
+    Якщо товар був видалений із зовнішньої бази (наприклад, проданий):
+    знаходимо його публікації в каналах і оновлюємо підпис на «🔴 НЕМАЄ В НАЯВНОСТІ / ПРОДАНО»
+    або видаляємо кнопку замовлення.
+    """
+    # Знаходимо всі товари, які були імпортовані з цього джерела
+    prefix = f"src_{src.id}_"
+    res = await session.execute(
+        select(Product).where(
+            Product.source.startswith(prefix),
+            Product.status == "published"
+        )
+    )
+    published_products = list(res.scalars().all())
+
+    for prod in published_products:
+        ext_id = prod.source[len(prefix):]
+        # Якщо запису більше немає в базі даних (його видалили/купили)
+        if ext_id not in existing_external_ids:
+            logger.info(f"Товар #{prod.id} (зовнішній id={ext_id}) відсутній у джерелі '{src.name}'. Позначаємо як проданий.")
+            prod.status = "out_of_stock"
+            await session.commit()
+
+            # Знаходимо всі успішні доставки для цього товару в канали
+            logs_res = await session.execute(
+                select(DeliveryLogModel).where(
+                    DeliveryLogModel.record_id == str(prod.id),
+                    DeliveryLogModel.status == "success",
+                    DeliveryLogModel.external_message_id.isnot(None)
+                )
+            )
+            logs = list(logs_res.scalars().all())
+
+            # Текст для оновленого посту
+            sold_post = PreparedPost(
+                title=f"❌ [НЕМАЄ В НАЯВНОСТІ] {prod.title}",
+                body=(
+                    f"🔴 <b>ТОЙ ТОВАР ВЖЕ ПРОДАНО / НЕМАЄ В НАЯВНОСТІ</b>\n"
+                    f"───────────────────────\n"
+                    f"<s>{prod.title}</s>\n\n"
+                    f"<i>Цей товар вилучено з бази даних наявності.</i>"
+                ),
+                photo_file_id=prod.photo_file_id,
+                photo_url=prod.photo_url,
+                manager_button_url=None  # прибираємо кнопку зв'язку
+            )
+
+            for log_entry in logs:
+                if not log_entry.channel_id:
+                    continue
+                ch_res = await session.execute(
+                    select(PublishChannelModel).where(PublishChannelModel.id == log_entry.channel_id)
+                )
+                channel = ch_res.scalar_one_or_none()
+                if not channel or not channel.is_active:
+                    continue
+
+                try:
+                    ch_cfg = json.loads(decrypt_secret(channel.config_json))
+                    connector = create_connector(channel.type, ch_cfg, bot=bot)
+                    await connector.update(log_entry.external_message_id, sold_post)
+                    logger.info(f"Оновлено статус товару #{prod.id} на 'немає в наявності' у каналі {channel.name}")
+                except Exception as up_err:
+                    logger.warning(f"Не вдалося оновити пост у каналі {channel.id}: {up_err}")
+
+
 async def sync_external_data_sources(session, bot: Bot) -> None:
     """
     Опитує всі активні зовнішні джерела даних (PostgreSQL, MySQL, SQLite, HTTP API)
     та імпортує нові товари у чергу модерації 'pending'.
+    Також відстежує товари, які зникли з бази даних (продані), та оновлює їх статус у каналах.
     """
     src_res = await session.execute(
         select(DataSourceModel).where(DataSourceModel.is_active.is_(True))
@@ -44,26 +114,28 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                 except Exception:
                     fields = []
 
-            # Отримуємо записи з джерела
+            # Отримуємо всі наявні записи з джерела
             records = await adapter.fetch_records(
                 table_name=src.selected_table,
                 fields=fields,
                 pk_field=src.pk_field,
-                tracking_mode="full_diff",  # отримуємо всі наявні записи таблиці
-                limit=100
+                tracking_mode="full_diff",
+                limit=500
             )
 
-            # Перевіряємо кожен запис
+            current_record_ids = set()
+
             for rec in records:
+                current_record_ids.add(str(rec.id))
                 source_record_id = f"src_{src.id}_{rec.id}"
-                # Перевіряємо, чи ми вже імпортували цей запис
-                existing = await session.execute(
+
+                # 1. Перевірка 1: чи імпортували цей унікальний ID раніше
+                existing_by_src = await session.execute(
                     select(Product).where(Product.source == source_record_id)
                 )
-                if existing.scalar_one_or_none():
+                if existing_by_src.scalar_one_or_none():
                     continue
 
-                # Новий товар! Витягуємо поля
                 title = (
                     rec.data.get("title")
                     or rec.data.get("name")
@@ -93,6 +165,19 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                     or None
                 )
 
+                # 2. Перевірка 2: захист від дублікатів (1 в 1)
+                # Якщо вже є товар з такою ж назвою, описом та ціною, який вже опубліковано або очікує
+                duplicate_check = await session.execute(
+                    select(Product).where(
+                        Product.title == str(title),
+                        Product.price == (str(price) if price else None),
+                        Product.description == (str(description) if description else None),
+                        Product.status.in_(["pending", "waiting_approval", "published"])
+                    )
+                )
+                if duplicate_check.scalar_one_or_none():
+                    continue
+
                 new_product = Product(
                     title=str(title),
                     description=str(description) if description else None,
@@ -106,6 +191,9 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                 session.add(new_product)
                 await session.commit()
                 logger.info(f"Імпортовано новий товар #{new_product.id} з джерела '{src.name}' (ID={src.id})")
+
+            # 3. Перевірка видалених/куплених товарів у джерелі
+            await handle_deleted_products(session, bot, src, current_record_ids)
 
             src.last_sync_at = datetime.utcnow()
             src.last_error = None
@@ -130,7 +218,7 @@ async def check_and_process_db_updates(bot: Bot) -> None:
             # 2. Перевіряємо поточний статус режиму автопостингу
             auto_post_enabled = await SettingsService.get_auto_post_status(session)
 
-            # 3. Отримуємо нові товари зі статусом 'pending'
+            # 3. Отримуємо нові товари зі статусом 'pending' (лише 1 за раз, щоб не спамити)
             result = await session.execute(
                 select(Product)
                 .where(Product.status == "pending")
@@ -179,6 +267,7 @@ async def check_and_process_db_updates(bot: Bot) -> None:
 
                 else:
                     # РЕЖИМ 2: Ручне підтвердження (прев'ю розсилається всім адмінам)
+                    # Відправляємо товар на погодження і оновлюємо статус, щоб не надсилати повторно
                     await ProductService.update_product_status(
                         session=session,
                         product_id=product.id,
@@ -189,7 +278,7 @@ async def check_and_process_db_updates(bot: Bot) -> None:
                         try:
                             await bot.send_message(
                                 chat_id=admin_id,
-                                text="🔔 <b>Нове надходження товару з бази даних!</b> Потрібна модерація:",
+                                text="🔔 <b>Нове надходження товару!</b> Потрібна модерація:",
                                 parse_mode="HTML"
                             )
                             await PublisherService.send_product_post(
