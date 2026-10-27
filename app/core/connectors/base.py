@@ -10,6 +10,7 @@ class PreparedPost:
     body: str = ""
     photo_url: Optional[str] = None
     photo_file_id: Optional[str] = None
+    photo_blob: Optional[bytes] = None
     manager_button_url: Optional[str] = None
     extra_data: Dict[str, Any] = field(default_factory=dict)
 

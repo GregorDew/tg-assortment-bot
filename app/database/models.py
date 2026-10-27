@@ -31,6 +31,7 @@ class Product(Base):
     
     photo_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    photo_blob: Mapped[Optional[bytes]] = mapped_column(nullable=True)
 
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     source: Mapped[str] = mapped_column(String(50), default="db", nullable=False)

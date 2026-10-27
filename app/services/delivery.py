@@ -52,6 +52,7 @@ def product_to_prepared_post(product: Product) -> PreparedPost:
         body=PublisherService.format_product_post(product, is_preview=False),
         photo_url=product.photo_url,
         photo_file_id=product.photo_file_id,
+        photo_blob=product.photo_blob,
         manager_button_url=manager_url,
         extra_data={"product_id": product.id, "source": product.source},
     )

@@ -90,8 +90,25 @@ class TelegramPublisherConnector(BasePublisherConnector):
     async def _send(self, post: PreparedPost, parse_mode: Optional[str]) -> Any:
         reply_markup = self._build_keyboard(post.manager_button_url)
         caption = post.body
-        if (post.photo_file_id or post.photo_url) and caption and len(caption) > 1024:
+        if (post.photo_file_id or post.photo_url or post.photo_blob) and caption and len(caption) > 1024:
             caption = caption[:1000] + "…"
+
+        # 1. Якщо є бінарний файл прямо з БД
+        if post.photo_blob:
+            try:
+                from aiogram.types import BufferedInputFile
+                input_file = BufferedInputFile(post.photo_blob, filename="photo.jpg")
+                return await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=input_file,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                pass
+
+        # 2. Якщо є file_id
         if post.photo_file_id:
             try:
                 return await self.bot.send_photo(

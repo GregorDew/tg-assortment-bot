@@ -58,7 +58,22 @@ class PublisherService:
         caption = PublisherService.format_product_post(product, is_preview=is_preview)
 
         try:
-            # 1. Якщо є Telegram file_id
+            # 1. Якщо збережено бінарні байти самого файлу фото (BLOB із бази даних)
+            if product.photo_blob:
+                try:
+                    from aiogram.types import BufferedInputFile
+                    input_file = BufferedInputFile(product.photo_blob, filename=f"product_{product.id}.jpg")
+                    return await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=input_file,
+                        caption=caption,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+                except Exception as blob_err:
+                    logger.warning(f"Не вдалося надіслати photo_blob для товару #{product.id}: {blob_err}")
+
+            # 2. Якщо є Telegram file_id
             if product.photo_file_id:
                 try:
                     return await bot.send_photo(
@@ -73,7 +88,6 @@ class PublisherService:
                         f"Не вдалося надіслати photo_file_id для товару #{product.id} ({photo_err}). "
                         "Відправляю як текстовий пост."
                     )
-                    # Безпечний фолбек: якщо file_id чужий або застарілий, надсилаємо пост текстом
                     return await bot.send_message(
                         chat_id=chat_id,
                         text=caption,
@@ -81,7 +95,7 @@ class PublisherService:
                         reply_markup=reply_markup
                     )
 
-            # 2. Якщо є зовнішнє посилання на фото (URL)
+            # 3. Якщо є зовнішнє посилання на фото (URL)
             elif product.photo_url:
                 try:
                     return await bot.send_photo(
@@ -103,7 +117,7 @@ class PublisherService:
                         reply_markup=reply_markup
                     )
 
-            # 3. Якщо фото немає - відправляємо як текстове повідомлення
+            # 4. Якщо фото немає - відправляємо як текстове повідомлення
             else:
                 return await bot.send_message(
                     chat_id=chat_id,

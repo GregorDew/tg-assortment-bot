@@ -164,6 +164,12 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                     or rec.data.get("image")
                     or None
                 )
+                photo_blob = (
+                    rec.data.get("photo_blob")
+                    or rec.data.get("photo")
+                    or rec.data.get("image_blob")
+                    or None
+                )
 
                 # 2. Перевірка 2: захист від дублікатів (1 в 1)
                 # Якщо вже є товар з такою ж назвою, описом та ціною, який вже опубліковано або очікує
@@ -184,6 +190,7 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                     price=str(price) if price else None,
                     photo_file_id=str(photo_file_id) if photo_file_id else None,
                     photo_url=str(photo_url) if photo_url else None,
+                    photo_blob=photo_blob if isinstance(photo_blob, bytes) else None,
                     source=source_record_id,
                     status="pending",
                     created_at=datetime.utcnow()
