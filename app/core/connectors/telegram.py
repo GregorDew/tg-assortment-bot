@@ -93,21 +93,38 @@ class TelegramPublisherConnector(BasePublisherConnector):
         if (post.photo_file_id or post.photo_url) and caption and len(caption) > 1024:
             caption = caption[:1000] + "…"
         if post.photo_file_id:
-            return await self.bot.send_photo(
-                chat_id=self.chat_id,
-                photo=post.photo_file_id,
-                caption=caption,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-            )
+            try:
+                return await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=post.photo_file_id,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                # Фолбек на текст, якщо file_id недійсний
+                return await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
         if post.photo_url:
-            return await self.bot.send_photo(
-                chat_id=self.chat_id,
-                photo=post.photo_url,
-                caption=caption,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-            )
+            try:
+                return await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    photo=post.photo_url,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                return await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
         return await self.bot.send_message(
             chat_id=self.chat_id,
             text=caption,

@@ -60,23 +60,48 @@ class PublisherService:
         try:
             # 1. Якщо є Telegram file_id
             if product.photo_file_id:
-                return await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=product.photo_file_id,
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
+                try:
+                    return await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=product.photo_file_id,
+                        caption=caption,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+                except Exception as photo_err:
+                    logger.warning(
+                        f"Не вдалося надіслати photo_file_id для товару #{product.id} ({photo_err}). "
+                        "Відправляю як текстовий пост."
+                    )
+                    # Безпечний фолбек: якщо file_id чужий або застарілий, надсилаємо пост текстом
+                    return await bot.send_message(
+                        chat_id=chat_id,
+                        text=caption,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
 
             # 2. Якщо є зовнішнє посилання на фото (URL)
             elif product.photo_url:
-                return await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=product.photo_url,
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=reply_markup
-                )
+                try:
+                    return await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=product.photo_url,
+                        caption=caption,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+                except Exception as url_err:
+                    logger.warning(
+                        f"Не вдалося завантажити photo_url для товару #{product.id} ({url_err}). "
+                        "Відправляю як текстовий пост."
+                    )
+                    return await bot.send_message(
+                        chat_id=chat_id,
+                        text=caption,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
 
             # 3. Якщо фото немає - відправляємо як текстове повідомлення
             else:
