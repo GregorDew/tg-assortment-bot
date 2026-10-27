@@ -58,31 +58,6 @@ async def callback_toggle_autopost(callback: CallbackQuery):
         pass
 
 
-@router.callback_query(F.data == "admin:add_test_product")
-async def callback_add_test_product(callback: CallbackQuery):
-    """Додає тестовий товар у БД зі статусом 'pending' для перевірки роботи фонового воркера."""
-    import random
-    item_num = random.randint(100, 999)
-    title = f"Тестовий товар #{item_num}"
-    description = "Чудовий зразок товару, що надійшов у базі даних. Тестування роботи системи."
-    price = f"{item_num * 5} грн"
-    # Пряме стабільне зображення без 302-редиректів, яке завжди валідно підвантажується в Discord
-    photo_url = "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=600&auto=format&fit=crop"
-
-    async with async_session_maker() as session:
-        product = await ProductService.create_product(
-            session=session,
-            title=title,
-            description=description,
-            price=price,
-            photo_url=photo_url,
-            source="db",
-            status="pending"
-        )
-
-    await callback.answer(f"✅ Додано тестовий товар #{product.id} у БД!", show_alert=True)
-
-
 @router.callback_query(F.data == "admin:list_products")
 async def callback_list_products(callback: CallbackQuery):
     """Показує список останніх товарів у базі даних."""

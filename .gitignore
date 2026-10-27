@@ -32,6 +32,7 @@ venv/
 
 # Database & Logs
 bot.db
+*.db
 *.sqlite3
 *.log
 

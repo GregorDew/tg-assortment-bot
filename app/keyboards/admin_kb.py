@@ -22,9 +22,6 @@ def get_admin_main_kb(auto_post_enabled: bool) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text=f"🔄 Автопост: {status_icon}", callback_data="admin:toggle_autopost")
-        ],
-        [
-            InlineKeyboardButton(text="➕ Додати тестовий товар у БД", callback_data="admin:add_test_product")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
