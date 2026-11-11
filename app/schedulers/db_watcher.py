@@ -103,6 +103,11 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
         if not src.selected_table or not src.pk_field:
             continue
 
+        tbl_name = (src.selected_table or "").lower()
+        if tbl_name in ("customers", "clients", "users", "subscribers"):
+            logger.debug(f"Джерело '{src.name}' (таблиця {src.selected_table}) є базою клієнтів, пропускаємо.")
+            continue
+
         try:
             cfg = json.loads(decrypt_secret(src.config_json))
             adapter = create_data_source(src.type, cfg)
@@ -113,9 +118,15 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                     fields = json.loads(src.selected_fields)
                 except Exception:
                     fields = []
-            # Завжди додаємо photo_blob, якщо таблиця містить бінарне зображення
+
+            # Автоматично додаємо photo_blob у вибірку, щоб фото завжди підтягувалось із БД
             if fields and "photo_blob" not in fields:
                 fields.append("photo_blob")
+
+            fields_lower = [str(f).lower() for f in fields]
+            if "email" in fields_lower and "price" not in fields_lower and "title" not in fields_lower:
+                logger.debug(f"Джерело '{src.name}' містить email без price та title (база клієнтів), пропускаємо.")
+                continue
 
             # Отримуємо всі наявні записи з джерела
             records = await adapter.fetch_records(
@@ -136,7 +147,7 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                 existing_by_src = await session.execute(
                     select(Product).where(Product.source == source_record_id)
                 )
-                if existing_by_src.scalar_one_or_none():
+                if existing_by_src.scalars().first():
                     continue
 
                 title = (
@@ -181,10 +192,10 @@ async def sync_external_data_sources(session, bot: Bot) -> None:
                         Product.title == str(title),
                         Product.price == (str(price) if price else None),
                         Product.description == (str(description) if description else None),
-                        Product.status.in_(["pending", "waiting_approval", "published"])
+                        Product.status.in_(["pending", "waiting_approval", "published", "rejected", "out_of_stock"])
                     )
                 )
-                if duplicate_check.scalar_one_or_none():
+                if duplicate_check.scalars().first():
                     continue
 
                 new_product = Product(
